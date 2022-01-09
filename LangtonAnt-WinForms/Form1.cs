@@ -17,8 +17,6 @@ namespace LangtonAnt_WinForms
         #region private fields
         private readonly BackgroundWorker mCellUpdateWorker;
         private readonly System.Threading.SynchronizationContext mMainContext;
-        private readonly Bitmap mCellsBmp;
-        private readonly Bitmap mColorPaletteBmp;
         private readonly int MAX_CELLS_WIDTH;
         private readonly int MAX_CELLS_HEIGHT;
 
@@ -26,6 +24,9 @@ namespace LangtonAnt_WinForms
 
         private LangtonAnt mLangtonAnt;
         private int mStep;
+
+        private BufferedGraphics mCellsGraphics;
+        private BufferedGraphics mColorPaletteGraphics;
         #endregion
 
         /// <summary>
@@ -41,26 +42,9 @@ namespace LangtonAnt_WinForms
             mCellUpdateWorker.DoWork += CellUpdateWorker_DoWork;
             mCellUpdateWorker.RunWorkerCompleted += CellUpdateWorker_RunWorkerCompleted;
 
-            // Initialize bitmap
-            mCellsBmp = new Bitmap(pctboxCells.Width, pctboxCells.Height);
-            pctboxCells.Image = mCellsBmp;
-            using (var g = Graphics.FromImage(mCellsBmp))
-            {
-                g.Clear(this.BackColor);
-                pctboxCells.Refresh();
-            }
-
-            mColorPaletteBmp = new Bitmap(pctboxColorPalette.Width, pctboxColorPalette.Height);
-            pctboxColorPalette.Image = mColorPaletteBmp;
-            using (var g = Graphics.FromImage(mColorPaletteBmp))
-            {
-                g.Clear(this.BackColor);
-                pctboxColorPalette.Refresh();
-            }
-
             // Set maximum size.
-            MAX_CELLS_WIDTH = mCellsBmp.Width / Consts.CELL_PIXEL_SIZE;
-            MAX_CELLS_HEIGHT = mCellsBmp.Height / Consts.CELL_PIXEL_SIZE;
+            MAX_CELLS_WIDTH = pctboxCells.Width / Consts.CELL_PIXEL_SIZE;
+            MAX_CELLS_HEIGHT = pctboxCells.Height / Consts.CELL_PIXEL_SIZE;
 
             // Initialize datagridview comobobox
             this.initDirection.Items.Clear();
@@ -71,6 +55,14 @@ namespace LangtonAnt_WinForms
             btnStop.Click += StopButtonClicked;
             btnAddAntParam.Click += AddAntParamButtonCliecked;
             btnDeleteAntParam.Click += DeleteAntParamButtonClicked;
+
+            // Subscribe form events
+            this.Load += Form1_Load;
+            this.FormClosing += Form1_FormClosing;
+
+            // Subscribe Paint events
+            pctboxCells.Paint += PctboxCells_Paint;
+            pctboxColorPalette.Paint += PctboxColorPalette_Paint;
 
             // Set syncronization context
             mMainContext = System.Threading.SynchronizationContext.Current;
@@ -89,6 +81,47 @@ namespace LangtonAnt_WinForms
             SetStartStopButtonInteractivity(true);
         }
 
+        #region Picturebox's Event Handler
+        private void PctboxColorPalette_Paint(object sender, PaintEventArgs e)
+        {
+            mColorPaletteGraphics?.Render(e.Graphics);
+        }
+
+        private void PctboxCells_Paint(object sender, PaintEventArgs e)
+        {
+            if (false == mCellUpdateWorker.IsBusy)
+            {
+                mCellsGraphics?.Render(e.Graphics);
+            }
+        }
+        #endregion
+
+        #region Form's Event Handler
+        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            if(mCellUpdateWorker.IsBusy)
+            {
+                MessageBox.Show("Please stop simulation before form closing.");
+                e.Cancel = true;
+                return;
+            }
+
+            mCellsGraphics?.Dispose();
+            mColorPaletteGraphics?.Dispose();
+        }
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
+            var context = BufferedGraphicsManager.Current;
+            mCellsGraphics = context.Allocate(pctboxCells.CreateGraphics(), pctboxCells.DisplayRectangle);
+            mCellsGraphics.Graphics.Clear(this.BackColor);
+            mCellsGraphics.Render();
+
+            mColorPaletteGraphics = context.Allocate(pctboxColorPalette.CreateGraphics(), pctboxColorPalette.DisplayRectangle);
+            mColorPaletteGraphics.Graphics.Clear(this.BackColor);
+            mColorPaletteGraphics.Render();
+        }
+        #endregion
 
         #region BackgroundWorker Event Handler
         /// <summary>
@@ -111,16 +144,13 @@ namespace LangtonAnt_WinForms
 
                 mMainContext.Post(_ =>
                 {
-                    using (var g = Graphics.FromImage(mCellsBmp))
+                    foreach (var i in updated.Distinct())
                     {
-                        foreach (var i in updated.Distinct())
-                        {
-                            int x = i.E2 * Consts.CELL_PIXEL_SIZE;
-                            int y = i.E1 * Consts.CELL_PIXEL_SIZE;
-                            DrawCell(g, x, y, Consts.CELL_COLOR_BRUSHES[mLangtonAnt.Cells[i]]);
-                        }
+                        int x = i.E2 * Consts.CELL_PIXEL_SIZE;
+                        int y = i.E1 * Consts.CELL_PIXEL_SIZE;
+                        DrawCell(mCellsGraphics.Graphics, x, y, Consts.CELL_COLOR_BRUSHES[mLangtonAnt.Cells[i]]);
                     }
-                    pctboxCells.Refresh();
+                    mCellsGraphics.Render();
 
                     IncrementStep();
 
@@ -138,7 +168,7 @@ namespace LangtonAnt_WinForms
         }
         #endregion
 
-        #region Button Click Event Handler
+        #region Button's Event Handler
         /// <summary>
         /// Ant's parameter Add button clicked
         /// </summary>
@@ -174,24 +204,20 @@ namespace LangtonAnt_WinForms
             DrawColorPalette(txbRule.Text);
 
             // Initialize cells
-            using(var g = Graphics.FromImage(mCellsBmp))
+            mCellsGraphics.Graphics.Clear(this.BackColor);
+
+            // Draw cells
+            for (int i = 0; i < parameter.Rows; ++i)
             {
-                g.Clear(this.BackColor);
-
-                // Draw cells
-                for(int i = 0; i < parameter.Rows; ++i)
+                for (int j = 0; j < parameter.Columns; ++j)
                 {
-                    for(int j = 0; j < parameter.Columns; ++j)
-                    {
-                        int x = j * Consts.CELL_PIXEL_SIZE;
-                        int y = i * Consts.CELL_PIXEL_SIZE;
-                        DrawCell(g, x, y, Consts.CELL_COLOR_BRUSHES[mLangtonAnt.Cells[i,j]]);
-                    }
+                    int x = j * Consts.CELL_PIXEL_SIZE;
+                    int y = i * Consts.CELL_PIXEL_SIZE;
+                    DrawCell(mCellsGraphics.Graphics, x, y, Consts.CELL_COLOR_BRUSHES[mLangtonAnt.Cells[i, j]]);
                 }
-
-                pctboxCells.Refresh();
             }
-
+            mCellsGraphics.Render();
+            
             ResetStep();
 
             SetParameterInteractivity(false);
@@ -217,24 +243,21 @@ namespace LangtonAnt_WinForms
         /// </summary>
         private void DrawColorPalette(string rulestr)
         {
-            using (var g = Graphics.FromImage(mColorPaletteBmp))
+            mColorPaletteGraphics.Graphics.Clear(this.BackColor);
+
+            int blank = 4;
+            int cellsize = Math.Min(
+                pctboxColorPalette.Width / 2 - blank,
+                (pctboxColorPalette.Height - blank * (Consts.CELL_COLORS.Count + 1)) / Consts.CELL_COLORS.Count);
+
+            for (int i = 0; i < rulestr.Length; ++i)
             {
-                g.Clear(this.BackColor);
-
-                int blank = 4;
-                int cellsize = Math.Min(
-                    mColorPaletteBmp.Width / 2 - blank,
-                    (pctboxColorPalette.Height - blank * (Consts.CELL_COLORS.Count + 1)) / Consts.CELL_COLORS.Count);
-
-                for (int i = 0; i < rulestr.Length; ++i)
-                {
-                    int y = (i + 1) * blank + i * cellsize;
-                    g.FillRectangle(Consts.CELL_COLOR_BRUSHES[i], 0, y, cellsize, cellsize);
-                    g.DrawString(new string(rulestr[i], 1), this.Font, new SolidBrush(this.ForeColor), blank + cellsize, y);
-                }
-
-                pctboxColorPalette.Refresh();
+                int y = (i + 1) * blank + i * cellsize;
+                mColorPaletteGraphics.Graphics.FillRectangle(Consts.CELL_COLOR_BRUSHES[i], 0, y, cellsize, cellsize);
+                mColorPaletteGraphics.Graphics.DrawString(new string(rulestr[i], 1), this.Font, new SolidBrush(this.ForeColor), blank + cellsize, y);
             }
+
+            mColorPaletteGraphics.Render();
         }
         #endregion
 
